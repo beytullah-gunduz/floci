@@ -248,7 +248,9 @@ public class S3Service {
         }
 
         S3Object obj = objectStore.get(storeKey)
-                .orElseThrow(() -> new AwsException("NoSuchKey", "The specified key does not exist.", 404));
+                .orElseThrow(() -> versionId != null
+                        ? new AwsException("NoSuchVersion", "The specified version does not exist.", 404)
+                        : new AwsException("NoSuchKey", "The specified key does not exist.", 404));
 
         if (obj.isDeleteMarker()) {
             throw new AwsException("NoSuchKey", "The specified key does not exist.", 404);
