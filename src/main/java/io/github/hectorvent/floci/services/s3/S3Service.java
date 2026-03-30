@@ -409,7 +409,13 @@ public class S3Service {
         }
     }
 
+    public record ListObjectsResult(List<S3Object> objects, List<String> commonPrefixes) {}
+
     public List<S3Object> listObjects(String bucketName, String prefix, String delimiter, int maxKeys) {
+        return listObjectsWithPrefixes(bucketName, prefix, delimiter, maxKeys).objects();
+    }
+
+    public ListObjectsResult listObjectsWithPrefixes(String bucketName, String prefix, String delimiter, int maxKeys) {
         ensureBucketExists(bucketName);
 
         String keyPrefix = bucketName + "/";
@@ -423,21 +429,32 @@ public class S3Service {
                 .toList();
         allObjects = new ArrayList<>(allObjects);
 
+        List<String> commonPrefixes = List.of();
+
         if (delimiter != null && !delimiter.isEmpty()) {
-            // Filter to only return objects at this level (simulate directory listing)
-            allObjects = allObjects.stream()
-                    .filter(obj -> {
-                        String remainder = obj.getKey().substring(prefix != null ? prefix.length() : 0);
-                        return !remainder.contains(delimiter);
-                    })
-                    .toList();
+            Set<String> prefixSet = new LinkedHashSet<>();
+            List<S3Object> directObjects = new ArrayList<>();
+
+            for (S3Object obj : allObjects) {
+                String remainder = obj.getKey().substring(prefix != null ? prefix.length() : 0);
+                int delimIdx = remainder.indexOf(delimiter);
+                if (delimIdx >= 0) {
+                    String cp = (prefix != null ? prefix : "") + remainder.substring(0, delimIdx + delimiter.length());
+                    prefixSet.add(cp);
+                } else {
+                    directObjects.add(obj);
+                }
+            }
+
+            allObjects = directObjects;
+            commonPrefixes = new ArrayList<>(prefixSet);
         }
 
         if (maxKeys > 0 && allObjects.size() > maxKeys) {
             allObjects = allObjects.subList(0, maxKeys);
         }
 
-        return allObjects;
+        return new ListObjectsResult(allObjects, commonPrefixes);
     }
 
     public S3Object copyObject(String sourceBucket, String sourceKey,
@@ -1207,12 +1224,14 @@ public class S3Service {
         return bucketName + "/" + key + "#v#" + versionId;
     }
 
+    private static final String DATA_SUFFIX = ".s3data";
+
     private Path resolveObjectPath(String bucketName, String key) {
-        return dataRoot.resolve(bucketName).resolve(key);
+        return dataRoot.resolve(bucketName).resolve(key + DATA_SUFFIX);
     }
 
     private Path resolveVersionedPath(String bucketName, String key, String versionId) {
-        return dataRoot.resolve(".versions").resolve(bucketName).resolve(key).resolve(versionId);
+        return dataRoot.resolve(".versions").resolve(bucketName).resolve(key).resolve(versionId + DATA_SUFFIX);
     }
 
     private void writeVersionedFile(String bucketName, String key, String versionId, byte[] data) {

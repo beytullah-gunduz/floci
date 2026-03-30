@@ -112,7 +112,7 @@ class S3ServiceTest {
         byte[] data = "file content".getBytes(StandardCharsets.UTF_8);
         s3Service.putObject("test-bucket", "docs/readme.txt", data, "text/plain", null);
 
-        Path filePath = tempDir.resolve("s3/test-bucket/docs/readme.txt");
+        Path filePath = tempDir.resolve("s3/test-bucket/docs/readme.txt.s3data");
         assertTrue(Files.exists(filePath));
         assertArrayEquals(data, assertDoesNotThrow(() -> Files.readAllBytes(filePath)));
     }
@@ -122,7 +122,7 @@ class S3ServiceTest {
         s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.putObject("test-bucket", "file.txt", "data".getBytes(), null, null);
 
-        Path filePath = tempDir.resolve("s3/test-bucket/file.txt");
+        Path filePath = tempDir.resolve("s3/test-bucket/file.txt.s3data");
         assertTrue(Files.exists(filePath));
 
         s3Service.deleteObject("test-bucket", "file.txt");
@@ -178,6 +178,28 @@ class S3ServiceTest {
     }
 
     @Test
+    void listObjectsWithDelimiterReturnsCommonPrefixes() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+        s3Service.putObject("test-bucket", "docs/a.txt", "a".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "docs/sub/deep.txt", "d".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "images/pic.jpg", "img".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "root.txt", "r".getBytes(), null, null);
+
+        S3Service.ListObjectsResult result = s3Service.listObjectsWithPrefixes("test-bucket", null, "/", 1000);
+        assertEquals(1, result.objects().size(), "only root.txt has no delimiter in its key");
+        assertEquals("root.txt", result.objects().get(0).getKey());
+        assertEquals(2, result.commonPrefixes().size());
+        assertTrue(result.commonPrefixes().contains("docs/"));
+        assertTrue(result.commonPrefixes().contains("images/"));
+
+        S3Service.ListObjectsResult docsResult = s3Service.listObjectsWithPrefixes("test-bucket", "docs/", "/", 1000);
+        assertEquals(1, docsResult.objects().size(), "only docs/a.txt is at this level");
+        assertEquals("docs/a.txt", docsResult.objects().get(0).getKey());
+        assertEquals(1, docsResult.commonPrefixes().size());
+        assertTrue(docsResult.commonPrefixes().contains("docs/sub/"));
+    }
+
+    @Test
     void listObjectsInNonExistentBucketThrows() {
         assertThrows(AwsException.class, () ->
                 s3Service.listObjects("nonexistent", null, null, 100));
@@ -195,8 +217,7 @@ class S3ServiceTest {
         S3Object retrieved = s3Service.getObject("dest-bucket", "copy.txt");
         assertArrayEquals("content".getBytes(), retrieved.getData());
 
-        // Verify file exists on disk for the copy
-        assertTrue(Files.exists(tempDir.resolve("s3/dest-bucket/copy.txt")));
+        assertTrue(Files.exists(tempDir.resolve("s3/dest-bucket/copy.txt.s3data")));
     }
 
     @Test
@@ -262,6 +283,29 @@ class S3ServiceTest {
         assertNotNull(attributes.getChecksum());
         assertNotNull(attributes.getChecksum().getChecksumSHA256());
         assertNull(attributes.getObjectParts());
+    }
+
+    @Test
+    void putObjectKeyOverlappingWithPrefixDoesNotConflict() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+
+        byte[] childData = "parquet-partition".getBytes(StandardCharsets.UTF_8);
+        s3Service.putObject("test-bucket", "output.parquet/part-0001.parquet", childData, "application/octet-stream", null);
+
+        byte[] markerData = new byte[0];
+        assertDoesNotThrow(() ->
+                s3Service.putObject("test-bucket", "output.parquet", markerData, "application/x-directory", null));
+
+        S3Object child = s3Service.getObject("test-bucket", "output.parquet/part-0001.parquet");
+        assertArrayEquals(childData, child.getData());
+
+        S3Object marker = s3Service.getObject("test-bucket", "output.parquet");
+        assertArrayEquals(markerData, marker.getData());
+
+        Path bucketDir = tempDir.resolve("s3/test-bucket");
+        assertTrue(Files.isDirectory(bucketDir.resolve("output.parquet")));
+        assertTrue(Files.isRegularFile(bucketDir.resolve("output.parquet.s3data")));
+        assertTrue(Files.isRegularFile(bucketDir.resolve("output.parquet/part-0001.parquet.s3data")));
     }
 
     @Test
