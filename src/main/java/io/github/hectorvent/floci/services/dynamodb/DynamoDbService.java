@@ -887,10 +887,40 @@ public class DynamoDbService {
             }
 
             // Resolve the value
-            if (valuePart.startsWith(":") && exprAttrValues != null) {
+            if (valuePart.startsWith("if_not_exists(")) {
+                // if_not_exists(attrRef, fallbackExpr) evaluates to:
+                //   attrRef's current value  — when attrRef exists in the item
+                //   fallbackExpr             — otherwise
+                // The result is always assigned to attrName.
+                String[] args = extractFunctionArgs(valuePart);
+                if (args.length == 2) {
+                    String checkAttr = resolveAttributeName(args[0].trim(), exprAttrNames);
+                    String fallbackExpr = args[1].trim();
+                    JsonNode resolved;
+                    if (item.has(checkAttr)) {
+                        // attrRef exists — evaluate to its current value
+                        resolved = item.get(checkAttr);
+                    } else if (fallbackExpr.startsWith(":") && exprAttrValues != null) {
+                        resolved = exprAttrValues.get(fallbackExpr);
+                    } else {
+                        // fallback is itself an attribute reference
+                        resolved = item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
+                    }
+                    if (resolved != null) {
+                        item.set(attrName, resolved);
+                    }
+                }
+            } else if (valuePart.startsWith(":") && exprAttrValues != null) {
                 JsonNode value = exprAttrValues.get(valuePart);
                 if (value != null) {
                     item.set(attrName, value);
+                }
+            } else if (!valuePart.isEmpty()) {
+                // Plain attribute reference: SET a = b  or  SET a = #alias
+                String refAttr = resolveAttributeName(valuePart, exprAttrNames);
+                JsonNode refValue = item.get(refAttr);
+                if (refValue != null) {
+                    item.set(attrName, refValue);
                 }
             }
 
