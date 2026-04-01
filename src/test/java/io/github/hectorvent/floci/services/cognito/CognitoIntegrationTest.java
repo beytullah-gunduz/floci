@@ -173,6 +173,170 @@ class CognitoIntegrationTest {
         assertEquals("RS256", document.path("id_token_signing_alg_values_supported").get(0).asText());
     }
 
+    // ── Groups ────────────────────────────────────────────────────────
+
+    @Test
+    @Order(10)
+    void createGroup() throws Exception {
+        JsonNode resp = cognitoJson("CreateGroup", """
+                {
+                  "UserPoolId": "%s",
+                  "GroupName": "admin",
+                  "Description": "Admin group",
+                  "Precedence": 1
+                }
+                """.formatted(poolId));
+        assertEquals("admin", resp.path("Group").path("GroupName").asText());
+        assertEquals(poolId, resp.path("Group").path("UserPoolId").asText());
+        assertEquals("Admin group", resp.path("Group").path("Description").asText());
+        assertEquals(1, resp.path("Group").path("Precedence").asInt());
+    }
+
+    @Test
+    @Order(11)
+    void createGroupDuplicate() {
+        cognitoAction("CreateGroup", """
+                {
+                  "UserPoolId": "%s",
+                  "GroupName": "admin",
+                  "Description": "Admin group",
+                  "Precedence": 1
+                }
+                """.formatted(poolId))
+                .then()
+                .statusCode(400);
+    }
+
+    @Test
+    @Order(12)
+    void getGroup() throws Exception {
+        JsonNode resp = cognitoJson("GetGroup", """
+                {
+                  "UserPoolId": "%s",
+                  "GroupName": "admin"
+                }
+                """.formatted(poolId));
+        assertEquals("admin", resp.path("Group").path("GroupName").asText());
+    }
+
+    @Test
+    @Order(13)
+    void listGroups() throws Exception {
+        JsonNode resp = cognitoJson("ListGroups", """
+                {
+                  "UserPoolId": "%s"
+                }
+                """.formatted(poolId));
+        assertEquals(1, resp.path("Groups").size());
+        assertEquals("admin", resp.path("Groups").get(0).path("GroupName").asText());
+    }
+
+    @Test
+    @Order(14)
+    void adminAddUserToGroup() {
+        cognitoAction("AdminAddUserToGroup", """
+                {
+                  "UserPoolId": "%s",
+                  "GroupName": "admin",
+                  "Username": "%s"
+                }
+                """.formatted(poolId, username))
+                .then()
+                .statusCode(200);
+    }
+
+    @Test
+    @Order(15)
+    void adminListGroupsForUser() throws Exception {
+        JsonNode resp = cognitoJson("AdminListGroupsForUser", """
+                {
+                  "UserPoolId": "%s",
+                  "Username": "%s"
+                }
+                """.formatted(poolId, username));
+        assertEquals(1, resp.path("Groups").size());
+        assertEquals("admin", resp.path("Groups").get(0).path("GroupName").asText());
+    }
+
+    @Test
+    @Order(16)
+    void authenticateAndVerifyGroupsInToken() throws Exception {
+        Response authResponse = cognitoAction("InitiateAuth", """
+                {
+                  "ClientId": "%s",
+                  "AuthFlow": "USER_PASSWORD_AUTH",
+                  "AuthParameters": {
+                    "USERNAME": "%s",
+                    "PASSWORD": "%s"
+                  }
+                }
+                """.formatted(clientId, username, password));
+
+        authResponse.then().statusCode(200);
+
+        String accessToken = authResponse.jsonPath().getString("AuthenticationResult.AccessToken");
+        JsonNode payload = decodeJwtPayload(accessToken);
+
+        assertTrue(payload.has("cognito:groups"),
+                "JWT payload should contain cognito:groups claim");
+        assertTrue(payload.path("cognito:groups").toString().contains("\"admin\""),
+                "JWT payload should contain admin group");
+    }
+
+    @Test
+    @Order(17)
+    void adminRemoveUserFromGroup() {
+        cognitoAction("AdminRemoveUserFromGroup", """
+                {
+                  "UserPoolId": "%s",
+                  "GroupName": "admin",
+                  "Username": "%s"
+                }
+                """.formatted(poolId, username))
+                .then()
+                .statusCode(200);
+    }
+
+    @Test
+    @Order(18)
+    void adminListGroupsForUserEmpty() throws Exception {
+        JsonNode resp = cognitoJson("AdminListGroupsForUser", """
+                {
+                  "UserPoolId": "%s",
+                  "Username": "%s"
+                }
+                """.formatted(poolId, username));
+        assertEquals(0, resp.path("Groups").size());
+    }
+
+    @Test
+    @Order(19)
+    void deleteGroup() {
+        cognitoAction("DeleteGroup", """
+                {
+                  "UserPoolId": "%s",
+                  "GroupName": "admin"
+                }
+                """.formatted(poolId))
+                .then()
+                .statusCode(200);
+    }
+
+    @Test
+    @Order(20)
+    void getGroupNotFound() {
+        cognitoAction("GetGroup", """
+                {
+                  "UserPoolId": "%s",
+                  "GroupName": "admin"
+                }
+                """.formatted(poolId))
+                .then()
+                .statusCode(404);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+
     private static Response cognitoAction(String action, String body) {
         return given()
                 .header("X-Amz-Target", "AWSCognitoIdentityProviderService." + action)

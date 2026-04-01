@@ -16,6 +16,7 @@ Floci serves pool-specific discovery and JWKS endpoints, plus a relaxed OAuth to
 | **User Operations** | SignUp, ConfirmSignUp, GetUser, UpdateUserAttributes, ChangePassword, ForgotPassword, ConfirmForgotPassword |
 | **Authentication** | InitiateAuth, AdminInitiateAuth, RespondToAuthChallenge |
 | **User Listing** | ListUsers |
+| **Groups** | CreateGroup, GetGroup, ListGroups, DeleteGroup, AdminAddUserToGroup, AdminRemoveUserFromGroup, AdminListGroupsForUser |
 
 ## Well-Known And OAuth Endpoints
 
@@ -95,6 +96,26 @@ aws cognito-idp initiate-auth \
   --auth-parameters USERNAME=alice@example.com,PASSWORD=Perm1234! \
   --endpoint-url $AWS_ENDPOINT
 
+# Create a group
+aws cognito-idp create-group \
+  --user-pool-id $POOL_ID \
+  --group-name admin \
+  --description "Admin group" \
+  --endpoint-url $AWS_ENDPOINT
+
+# Add user to group
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id $POOL_ID \
+  --group-name admin \
+  --username alice@example.com \
+  --endpoint-url $AWS_ENDPOINT
+
+# List groups for user
+aws cognito-idp admin-list-groups-for-user \
+  --user-pool-id $POOL_ID \
+  --username alice@example.com \
+  --endpoint-url $AWS_ENDPOINT
+
 # Fetch the pool discovery document
 curl -s "$AWS_ENDPOINT/$POOL_ID/.well-known/openid-configuration"
 
@@ -118,6 +139,8 @@ http://localhost:4566/$POOL_ID/.well-known/openid-configuration
 ```
 http://localhost:4566/$POOL_ID/.well-known/jwks.json
 ```
+
+Tokens include the `cognito:groups` claim as a JSON array when the authenticated user belongs to one or more groups.
 
 Tokens issued by Cognito auth flows and the OAuth token endpoint use the emulator base URL plus the pool id:
 
