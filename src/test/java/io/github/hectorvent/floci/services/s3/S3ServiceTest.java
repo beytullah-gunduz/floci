@@ -287,6 +287,29 @@ class S3ServiceTest {
     }
 
     @Test
+    void putObjectMarkerFirstThenChildDoesNotConflict() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+
+        byte[] markerData = new byte[0];
+        s3Service.putObject("test-bucket", "output.parquet", markerData, "application/x-directory", null);
+
+        byte[] childData = "parquet-partition".getBytes(StandardCharsets.UTF_8);
+        assertDoesNotThrow(() ->
+                s3Service.putObject("test-bucket", "output.parquet/part-0001.parquet", childData, "application/octet-stream", null));
+
+        S3Object marker = s3Service.getObject("test-bucket", "output.parquet");
+        assertArrayEquals(markerData, marker.getData());
+
+        S3Object child = s3Service.getObject("test-bucket", "output.parquet/part-0001.parquet");
+        assertArrayEquals(childData, child.getData());
+
+        Path bucketDir = tempDir.resolve("s3/test-bucket");
+        assertTrue(Files.isRegularFile(bucketDir.resolve("output.parquet.s3data")));
+        assertTrue(Files.isDirectory(bucketDir.resolve("output.parquet")));
+        assertTrue(Files.isRegularFile(bucketDir.resolve("output.parquet/part-0001.parquet.s3data")));
+    }
+
+    @Test
     void copyObjectCanReplaceMetadata() {
         s3Service.createBucket("source-bucket", "us-east-1");
         s3Service.createBucket("dest-bucket", "us-east-1");
