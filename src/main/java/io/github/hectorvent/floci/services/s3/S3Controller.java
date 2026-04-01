@@ -270,7 +270,7 @@ public class S3Controller {
                     .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                     .start("ListBucketResult", AwsNamespaces.S3)
                     .elem("Name", bucket)
-                    .elem("Prefix", prefix)
+                    .elem("Prefix", prefix != null ? prefix : "")
                     .elem("Delimiter", delimiter)
                     .elem("MaxKeys", max);
             if (v2) {
