@@ -262,6 +262,7 @@ floci:
     cloudwatchlogs:
       enabled: true
       max-events-per-query: 10000
+      query-completion-delay-ms: 0
     cloudwatchmetrics:
       enabled: true
     secretsmanager:
