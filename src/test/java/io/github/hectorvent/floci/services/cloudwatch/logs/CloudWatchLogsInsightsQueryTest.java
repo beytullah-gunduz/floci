@@ -459,27 +459,48 @@ class CloudWatchLogsInsightsQueryTest {
     }
 
     @Test
-    void unsupportedCommandsAreIgnored() {
-        String group = "data-sources/connectors";
-        String stream = "s-1";
-        createGroupStream(service, group, stream);
-        put(group, stream, BASE_MS + 1000, "INFO", "JOB-1", "kept");
-        put(group, stream, BASE_MS + 2000, "TRACE", "JOB-1", "dropped");
-
-        // 'parse' / 'stats' are unsupported: ignored with a warning, while the supported stages still run.
-        String query = """
-                fields @message
-                | filter level != 'TRACE'
-                | parse @message '*' as x
-                | stats count(*) by level
-                """;
+    void unsupportedCommandThrowsMalformedQuery() {
+        String group = "/app/logs/cmd";
+        createGroupStream(service, group, "s-1");
         long startSec = BASE_MS / 1000 - 10;
-        String queryId = service.startQuery(List.of(group), startSec, startSec + 86400, query, null, REGION);
+        AwsException ex = assertThrows(AwsException.class, () -> service.startQuery(
+                List.of(group), startSec, startSec + 86400, "fields @message | stats count(*) by level", null, REGION));
+        assertEquals("MalformedQueryException", ex.getErrorCode());
+    }
 
-        CloudWatchLogsService.QueryState state = service.getQueryResults(queryId);
-        assertEquals("Complete", state.status());
-        assertEquals(1, state.rows().size(), "TRACE dropped by filter; parse/stats ignored, not applied");
-        assertTrue(state.rows().get(0).get("@message").contains("kept"));
+    @Test
+    void compoundFilterThrowsMalformedQuery() {
+        String group = "/app/logs/compound";
+        createGroupStream(service, group, "s-1");
+        long startSec = BASE_MS / 1000 - 10;
+        AwsException ex = assertThrows(AwsException.class, () -> service.startQuery(
+                List.of(group), startSec, startSec + 86400,
+                "fields @message | filter level = 'ERROR' and env = 'prod'", null, REGION));
+        assertEquals("MalformedQueryException", ex.getErrorCode());
+    }
+
+    @Test
+    void unparseableFilterThrowsMalformedQuery() {
+        String group = "/app/logs/badfilter";
+        createGroupStream(service, group, "s-1");
+        long startSec = BASE_MS / 1000 - 10;
+        AwsException ex = assertThrows(AwsException.class, () -> service.startQuery(
+                List.of(group), startSec, startSec + 86400, "fields @message | filter noOperatorHere", null, REGION));
+        assertEquals("MalformedQueryException", ex.getErrorCode());
+    }
+
+    @Test
+    void startQueryLimitOutOfRangeThrowsInvalidParameter() {
+        String group = "/app/logs/limit";
+        createGroupStream(service, group, "s-1");
+        long startSec = BASE_MS / 1000 - 10;
+        // Below 1 and above the emulator cap (maxEventsPerQuery = 10000) are both invalid.
+        AwsException under = assertThrows(AwsException.class, () -> service.startQuery(
+                List.of(group), startSec, startSec + 86400, "fields @message", 0, REGION));
+        assertEquals("InvalidParameterException", under.getErrorCode());
+        AwsException over = assertThrows(AwsException.class, () -> service.startQuery(
+                List.of(group), startSec, startSec + 86400, "fields @message", 20000, REGION));
+        assertEquals("InvalidParameterException", over.getErrorCode());
     }
 
     @Test

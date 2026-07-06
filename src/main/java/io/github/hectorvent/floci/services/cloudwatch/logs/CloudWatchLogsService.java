@@ -505,6 +505,15 @@ public class CloudWatchLogsService {
         long startMs = startTimeSeconds * 1000L;
         long endMs = endTimeSeconds * 1000L;
 
+        // Validate the query and limit up front (compile-first): a malformed query or an out-of-range
+        // limit fails before any group resolution, matching AWS. maxEventsPerQuery is the emulator's
+        // hard result cap, so a limit above it cannot be honored and is rejected rather than clamped.
+        LogsInsightsQuery parsed = LogsInsightsQuery.parse(queryString);
+        if (limit != null && (limit < 1 || limit > maxEventsPerQuery)) {
+            throw new AwsException("InvalidParameterException",
+                    "limit must be between 1 and " + maxEventsPerQuery + ".", 400);
+        }
+
         // De-duplicate the requested groups (the same group can arrive via multiple selectors, e.g.
         // logGroupNames + logGroupIdentifiers) so it is scanned — and counted — once, not twice.
         List<String> distinctGroups = logGroupNames.stream()
@@ -534,8 +543,7 @@ public class CloudWatchLogsService {
         }
 
         int effectiveLimit = (limit != null && limit > 0) ? Math.min(limit, maxEventsPerQuery) : maxEventsPerQuery;
-        List<LinkedHashMap<String, String>> rows =
-                LogsInsightsQuery.parse(queryString).evaluate(gathered, effectiveLimit);
+        List<LinkedHashMap<String, String>> rows = parsed.evaluate(gathered, effectiveLimit);
 
         String queryId = UUID.randomUUID().toString();
         long completeAtMs = clock.getAsLong() + queryCompletionDelayMs;

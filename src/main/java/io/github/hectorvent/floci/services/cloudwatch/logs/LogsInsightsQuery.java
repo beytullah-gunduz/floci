@@ -2,8 +2,8 @@ package io.github.hectorvent.floci.services.cloudwatch.logs;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.cloudwatch.logs.model.LogEvent;
-import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -29,13 +29,14 @@ import java.util.Set;
  * Fields may be the synthetic {@code @timestamp} / {@code @message} / {@code @ingestionTime} /
  * {@code @ptr}, or a dotted path into the JSON log message (e.g. {@code params.job_id}, {@code level}).
  *
- * <p>This is intentionally <em>not</em> a full Insights implementation: unsupported commands
- * (e.g. {@code stats}, {@code parse}) are ignored with a warning. Pipes ({@code |}) inside quoted
- * filter values are respected and do not split the query into stages.
+ * <p>This is intentionally <em>not</em> a full Insights implementation, but it fails loudly rather
+ * than silently: an unsupported command (e.g. {@code stats}, {@code parse}) or a filter it cannot
+ * evaluate faithfully (compound {@code and}/{@code or}, unsupported operators, malformed values) is
+ * rejected with {@code MalformedQueryException}. Pipes ({@code |}) inside quoted filter values are
+ * respected and do not split the query into stages.
  */
 final class LogsInsightsQuery {
 
-    private static final Logger LOG = Logger.getLogger(LogsInsightsQuery.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final DateTimeFormatter TS_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
@@ -104,12 +105,7 @@ final class LogsInsightsQuery {
     private void applyStage(String cmd, String args) {
         switch (cmd) {
             case "fields", "display" -> splitCsv(args, fields);
-            case "filter", "where" -> {
-                Filter f = parseFilter(args);
-                if (f != null) {
-                    filters.add(f);
-                }
-            }
+            case "filter", "where" -> filters.add(parseFilter(args));
             case "sort", "order" -> {
                 String[] s = args.split("\\s+");
                 if (s.length > 0 && !s[0].isEmpty()) {
@@ -125,10 +121,10 @@ final class LogsInsightsQuery {
                 try {
                     limit = Integer.parseInt(args.trim());
                 } catch (NumberFormatException e) {
-                    LOG.warnv("Ignoring invalid Logs Insights limit: {0}", args);
+                    throw malformed("Invalid limit: " + args);
                 }
             }
-            default -> LOG.warnv("Ignoring unsupported Logs Insights command: {0}", cmd);
+            default -> throw malformed("Unsupported command: " + cmd);
         }
     }
 
@@ -142,9 +138,6 @@ final class LogsInsightsQuery {
     }
 
     private static Filter parseFilter(String expr) {
-        // Scan for the operator OUTSIDE any quoted value, taking the leftmost one and checking
-        // '!=' / '==' before '='. This avoids mistaking an operator inside a quoted literal
-        // (e.g. filter x = 'a==b') for the real one.
         char quote = 0;
         for (int i = 0; i < expr.length(); i++) {
             char c = expr.charAt(i);
@@ -161,13 +154,55 @@ final class LogsInsightsQuery {
                         : null;
                 if (op != null) {
                     String field = expr.substring(0, i).trim();
-                    String value = unquote(expr.substring(i + op.length()).trim());
-                    return new Filter(field, op.equals("!="), value);
+                    String rawValue = expr.substring(i + op.length()).trim();
+                    if (!isFieldToken(field) || !isSimpleValue(rawValue)) {
+                        throw malformed("Unsupported filter: " + expr);
+                    }
+                    return new Filter(field, op.equals("!="), unquote(rawValue));
                 }
             }
         }
-        LOG.warnv("Ignoring unsupported Logs Insights filter: {0}", expr);
-        return null;
+        throw malformed("Unsupported filter: " + expr);
+    }
+
+    /** A field is a plain token: no whitespace and no comparison/paren characters. */
+    private static boolean isFieldToken(String field) {
+        if (field.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < field.length(); i++) {
+            char c = field.charAt(i);
+            if (Character.isWhitespace(c) || c == '<' || c == '>' || c == '=' || c == '(' || c == ')') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * A value is a single fully-quoted literal (opening quote closed only at the last char, with no
+     * interior occurrence of that same quote) or a bare token (no whitespace). This rejects compound
+     * filters — e.g. the value {@code 'ERROR' and env = 'prod'} has an interior quote — without a
+     * separate and/or parser, while accepting {@code 'a==b'}, {@code 'a|b'}, and {@code "O'Brien"}.
+     */
+    private static boolean isSimpleValue(String v) {
+        if (v.isEmpty()) {
+            return false;
+        }
+        char first = v.charAt(0);
+        if (first == '\'' || first == '"') {
+            return v.length() >= 2 && v.charAt(v.length() - 1) == first && v.indexOf(first, 1) == v.length() - 1;
+        }
+        for (int i = 0; i < v.length(); i++) {
+            if (Character.isWhitespace(v.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static AwsException malformed(String message) {
+        return new AwsException("MalformedQueryException", message, 400);
     }
 
     private static String unquote(String s) {
